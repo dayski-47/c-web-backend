@@ -41,5 +41,5 @@ typedef struct {
 int  server_init(ServerState *s);   // WSAStartup, socket, bind, listen
 void server_run(ServerState *s);    // the main loop
 void server_shutdown(ServerState *s); // cleanup, goodbye messages, WSACleanup
-
+void drop_client(ServerState *s, int i); // client cleanup when fail
 #endif // SERVER_H

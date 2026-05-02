@@ -19,8 +19,7 @@ int server_init(ServerState *s) {
     // version check — make sure we got winsock 2.2
     if (LOBYTE(wsaData.wVersion) != 2 || HIBYTE(wsaData.wVersion) != 2) {
         fprintf(stderr, "Version 2.2 of Winsock not available.\n");
-        WSACleanup();
-        return 1;
+        goto done;
     }
  
     // construct socket
@@ -28,8 +27,7 @@ int server_init(ServerState *s) {
     if (s->listener == INVALID_SOCKET) {
         printf("Error with construction: %d\n", WSAGetLastError());
         closesocket(s->listener);
-        WSACleanup();
-        return 1;
+        goto done;
     }
  
     // setup for multiple connections
@@ -37,9 +35,7 @@ int server_init(ServerState *s) {
     result = setsockopt(s->listener, SOL_SOCKET, SO_REUSEADDR, &multiple, sizeof(multiple));
     if (result < 0) {
         printf("Multiple client setup failed: %d\n", WSAGetLastError());
-        closesocket(s->listener);
-        WSACleanup();
-        return 1;
+        goto done_socket;
     }
  
     // bind to address
@@ -50,18 +46,14 @@ int server_init(ServerState *s) {
     result = bind(s->listener, (struct sockaddr*)&address, sizeof(address)); // reads address as a whole sockaddr struct
     if (result == SOCKET_ERROR) {
         printf("Bind failed: %d\n", WSAGetLastError());
-        closesocket(s->listener);
-        WSACleanup();
-        return 1;
+        goto done_socket;
     }
  
     // set as a listener
     result = listen(s->listener, SOMAXCONN); // listens to binded address, maximum connections
     if (result == SOCKET_ERROR) {
         printf("Listen failed: %d\n", WSAGetLastError());
-        closesocket(s->listener);
-        WSACleanup();
-        return 1;
+        goto done_socket;
     }
  
     // clear client array
@@ -71,8 +63,16 @@ int server_init(ServerState *s) {
  
     printf("Accepting on %s:%d\n", ADDRESS, PORT);
     return 0;
+
+    done_socket:
+        closesocket(s->listener);
+    done:
+        WSACleanup();
+        return 1;
 }
- 
+
+void drop_client(ServerState *s, int i);
+
 // ------------------------------------------------
 // MAIN LOOP
 // handles new connections and client activity
@@ -171,29 +171,20 @@ void server_run(ServerState *s) {
                     
                     if (fail) {
                         // HTTP 400 Bad Request
-                        shutdown(sd, SD_BOTH);
-                        closesocket(sd);
-                        s->clients[i] = 0;
-                        s->curNoClients--;
+                        drop_client(s, i);
                     } else {
                         
                         handler_func h = route(&req); 
                         char *response = h(&req); // generate response
                         if (response == NULL){
-                            shutdown(sd, SD_BOTH);
-                            closesocket(sd);
-                            s->clients[i] = 0;
-                            s->curNoClients--;
+                            drop_client(s, i);
                         } else {
     
                             sendResult = send(sd, response, strlen(response), 0);
                             
                             if (sendResult == SOCKET_ERROR){
                                 printf("Failed to Send: %d", WSAGetLastError());
-                                shutdown(sd, SD_BOTH);
-                                closesocket(sd);
-                                s->clients[i] = 0;
-                                s->curNoClients--;
+                                drop_client(s, i);
                             }
 
                             free(response);
@@ -209,10 +200,7 @@ void server_run(ServerState *s) {
                     getpeername(sd, (struct sockaddr*)&clientAddr, &clientAddrlen);
                     printf("Client disconnected at %s:%d\n", inet_ntoa(clientAddr.sin_addr), 
                             ntohs(clientAddr.sin_port));                    
-                    shutdown(sd, SD_BOTH);
-                    closesocket(sd);
-                    s->clients[i] = 0;
-                    s->curNoClients--;
+                    drop_client(s, i);
                     continue;
                 }
                 
@@ -224,13 +212,17 @@ void server_run(ServerState *s) {
                     s->curNoClients--;
                     continue;
                 }
-
             }
         }
-
-
     }
 }
+
+void drop_client(ServerState *s, int i) {
+    shutdown(s->clients[i], SD_BOTH);
+    closesocket(s->clients[i]);
+    s->clients[i] = 0;
+    s->curNoClients--;
+}     
  
 // ------------------------------------------------
 // CLEANUP
